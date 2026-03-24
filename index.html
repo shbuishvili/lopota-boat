@@ -13,7 +13,7 @@
           <img id="logoPreview" alt="Lopota logo" src="assets/lopota-logo.svg" />
           <div>
             <h1>Lopota Lake Resort &amp; Spa — Boat Race</h1>
-            <p>დეპარტამენტების შეჯიბრი • ნავი + მაისური ლოგოთი • Space = Paddle</p>
+            <p>Multiplayer lobby (≥3) • Space = Paddle • ერთი ლინკით ყველანი</p>
           </div>
         </div>
         <div class="panel" style="padding:12px 14px; display:flex; gap:10px; align-items:center;">
@@ -28,64 +28,51 @@
         <div class="panel controls">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
             <div>
-              <div style="font-weight:800; letter-spacing:.2px;">Setup</div>
-              <div style="font-size:12.5px; color:var(--muted); margin-top:2px;">აირჩიე დეპარტამენტი და დაიწყე რბოლა</div>
+              <div style="font-weight:800; letter-spacing:.2px;">Lobby</div>
+              <div style="font-size:12.5px; color:var(--muted); margin-top:2px;">Start აქტიურდება როცა მოთამაშეები ≥ 3</div>
             </div>
           </div>
 
           <div class="row">
             <label>
-              Department
-              <select id="dept"></select>
+              Your name
+              <input id="playerName" type="text" placeholder="მაგ: Nino" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.22); color:var(--text); outline:none;" />
             </label>
             <label>
-              Difficulty
-              <select id="difficulty">
-                <option value="1">Easy</option>
-                <option value="2" selected>Normal</option>
-                <option value="3">Hard</option>
-              </select>
+              Department
+              <select id="dept"></select>
             </label>
           </div>
 
           <div class="row">
-            <label>
-              Departments (lanes)
-              <select id="lanes">
-                <option value="3">3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-                <option value="6" selected>6</option>
-                <option value="7">7</option>
-                <option value="8">8</option>
-                <option value="9">9</option>
-                <option value="10">10</option>
-              </select>
-            </label>
             <label>
               Track length (m)
               <input id="length" type="number" min="700" max="2600" step="50" value="1300" />
             </label>
-          </div>
-
-          <div class="row">
             <label>
               Upload logo (PNG/SVG)
               <input id="logoFile" type="file" accept="image/*" />
             </label>
+          </div>
+
+          <div class="row" style="grid-template-columns: 1fr;">
             <label>
-              Logo options
-              <button id="clearLogo" type="button">Use default</button>
+              Share link (same room)
+              <div style="display:flex; gap:10px; align-items:center;">
+                <input id="shareLink" type="text" readonly style="flex:1; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.22); color:var(--text); outline:none;" />
+                <button id="copyLink" type="button">Copy</button>
+              </div>
             </label>
           </div>
 
           <div class="btnrow">
-            <button id="start" class="primary" type="button">Start</button>
+            <button id="start" class="primary" type="button" disabled>Start</button>
             <button id="paddle" type="button" disabled>Paddle</button>
+            <button id="reset" type="button">Reset</button>
           </div>
 
           <div class="footer">
-            <div>Tip: არ “ასპამო” — სწორი ტემპი უფრო სწრაფია.</div>
+            <div id="connHint">Connecting…</div>
           </div>
         </div>
 
@@ -93,11 +80,21 @@
           <div class="status">
             <div class="chip">
               <span id="statusDot" class="dot warn"></span>
-              <span id="statusText" style="font-weight:750;">Ready</span>
+              <span id="statusText" style="font-weight:750;">Waiting for players…</span>
             </div>
             <div class="chip" title="Use the Lopota logo on boat + shirt">
               <span style="color:var(--muted); font-size:12.5px;">Logo:</span>
               <span style="font-weight:800;">Boat • Shirt</span>
+            </div>
+          </div>
+          <div class="status" style="justify-content:flex-start;">
+            <div class="chip">
+              <span style="color:var(--muted); font-size:12.5px;">Room:</span>
+              <span id="roomId" style="font-weight:850;">—</span>
+            </div>
+            <div class="chip">
+              <span style="color:var(--muted); font-size:12.5px;">Players:</span>
+              <span id="playerCount" style="font-weight:850;">0</span>
             </div>
           </div>
           <div id="bars" class="bars"></div>

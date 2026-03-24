@@ -1,4 +1,4 @@
-﻿/* Lopota Boat Race — simple canvas mini game */
+﻿/* Lopota Boat Race — Multiplayer (Render) + Canvas */
 
 const STORAGE_KEY_LOGO = "lopotaBoatRace.logoDataUrl.v1";
 
@@ -18,16 +18,6 @@ const DEPARTMENTS = [
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const now = () => performance.now();
-
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return function () {
-    t += 0x6d2b79f5;
-    let x = Math.imul(t ^ (t >>> 15), 1 | t);
-    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function svgToDataUrl(svgText) {
   const encoded = encodeURIComponent(svgText)
@@ -69,73 +59,18 @@ async function getDefaultLogoDataUrl() {
   }
 }
 
-function formatPct(x) {
-  return `${Math.round(clamp(x, 0, 1) * 100)}%`;
-}
-
-function pickCompetitors(playerDeptName, rng, lanes) {
-  const pool = DEPARTMENTS.map((d) => d.name).filter((n) => n !== playerDeptName);
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  return [playerDeptName, ...pool.slice(0, Math.max(0, lanes - 1))];
-}
-
-function createBoat({ dept, lane, lanes, isPlayer, rng }) {
-  return {
-    dept,
-    isPlayer,
-    lane,
-    x: 0,
-    speed: 0,
-    stamina: 1,
-    lastPaddleAt: 0,
-    wobbleSeed: rng(),
-    finishTimeMs: null,
-  };
-}
-
 function getDept(name) {
   return DEPARTMENTS.find((d) => d.name === name) ?? DEPARTMENTS[0];
 }
 
-function computeBoatMaxSpeed(stamina) {
-  return lerp(320, 520, clamp(stamina, 0, 1));
+function formatPct(x) {
+  return `${Math.round(clamp(x, 0, 1) * 100)}%`;
 }
 
-function paddleImpulse(stamina, timeSinceLastMs) {
-  const cadence = clamp(timeSinceLastMs / 260, 0, 1);
-  const base = lerp(68, 92, cadence);
-  return base * lerp(0.75, 1.08, stamina);
-}
-
-function staminaDrain(timeSinceLastMs) {
-  const spam = 1 - clamp(timeSinceLastMs / 240, 0, 1);
-  return 0.03 + 0.10 * spam;
-}
-
-function staminaRegen(dt) {
-  return 0.07 * dt;
-}
-
-function difficultyParams(level) {
-  if (level === 1) return { aiSkill: 0.82, aiAggro: 0.55 };
-  if (level === 2) return { aiSkill: 0.92, aiAggro: 0.7 };
-  return { aiSkill: 1.04, aiAggro: 0.82 };
-}
-
-function byProgressDesc(a, b) {
-  const pa = a.x;
-  const pb = b.x;
-  if (pb !== pa) return pb - pa;
-  return (a.finishTimeMs ?? 1e18) - (b.finishTimeMs ?? 1e18);
-}
-
-function createBars(container, names) {
+function createBars(container, players) {
   container.innerHTML = "";
   const items = [];
-  for (const n of names) {
+  for (const p of players) {
     const el = document.createElement("div");
     el.className = "bar";
     el.innerHTML = `
@@ -146,11 +81,13 @@ function createBars(container, names) {
     const nameEl = el.querySelector(".name");
     const meterI = el.querySelector(".meter > i");
     const pctEl = el.querySelector(".pct");
-    nameEl.textContent = n;
-    const dept = getDept(n);
+
+    const dept = getDept(p.dept);
+    nameEl.textContent = `${p.name} — ${p.dept}`;
     meterI.style.background = `linear-gradient(90deg, ${dept.color} 0%, rgba(255,255,255,.92) 160%)`;
+
     container.appendChild(el);
-    items.push({ n, el, meterI, pctEl, nameEl });
+    items.push({ id: p.id, nameEl, meterI, pctEl });
   }
   return items;
 }
@@ -162,25 +99,50 @@ function setStatus(dot, textEl, kind, text) {
   textEl.textContent = text;
 }
 
+function id6() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+function getRoomId() {
+  const url = new URL(location.href);
+  const room = url.searchParams.get("room");
+  if (room && /^[A-Z0-9_-]{2,24}$/i.test(room)) return room.toUpperCase();
+  const newRoom = id6();
+  url.searchParams.set("room", newRoom);
+  history.replaceState({}, "", url.toString());
+  return newRoom;
+}
+
+function wsUrl() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/ws`;
+}
+
 async function main() {
   const canvas = document.querySelector("#game");
   const ctx = canvas.getContext("2d");
 
   const logoImgEl = document.querySelector("#logoPreview");
   const fileInput = document.querySelector("#logoFile");
-  const btnClearLogo = document.querySelector("#clearLogo");
 
+  const nameInput = document.querySelector("#playerName");
   const deptSelect = document.querySelector("#dept");
-  const difficultySelect = document.querySelector("#difficulty");
-  const lanesSelect = document.querySelector("#lanes");
   const lengthInput = document.querySelector("#length");
+
+  const shareLink = document.querySelector("#shareLink");
+  const copyLink = document.querySelector("#copyLink");
+  const connHint = document.querySelector("#connHint");
 
   const btnStart = document.querySelector("#start");
   const btnPaddle = document.querySelector("#paddle");
+  const btnReset = document.querySelector("#reset");
 
   const statusDot = document.querySelector("#statusDot");
   const statusText = document.querySelector("#statusText");
   const barsWrap = document.querySelector("#bars");
+
+  const roomIdEl = document.querySelector("#roomId");
+  const playerCountEl = document.querySelector("#playerCount");
 
   for (const d of DEPARTMENTS) {
     const opt = document.createElement("option");
@@ -189,9 +151,8 @@ async function main() {
     deptSelect.appendChild(opt);
   }
 
+  nameInput.value = localStorage.getItem("lopotaBoatRace.name") || "";
   deptSelect.value = localStorage.getItem("lopotaBoatRace.dept") || DEPARTMENTS[0].name;
-  difficultySelect.value = localStorage.getItem("lopotaBoatRace.diff") || "2";
-  lanesSelect.value = localStorage.getItem("lopotaBoatRace.lanes") || "6";
   lengthInput.value = localStorage.getItem("lopotaBoatRace.len") || "1300";
 
   let logoDataUrl = localStorage.getItem(STORAGE_KEY_LOGO) || (await getDefaultLogoDataUrl());
@@ -213,26 +174,33 @@ async function main() {
     logoImg = await loadImage(logoDataUrl);
   });
 
-  btnClearLogo.addEventListener("click", async () => {
-    localStorage.removeItem(STORAGE_KEY_LOGO);
-    logoDataUrl = await getDefaultLogoDataUrl();
-    logoImgEl.src = logoDataUrl;
-    logoImg = await loadImage(logoDataUrl);
-    fileInput.value = "";
+  const roomId = getRoomId();
+  roomIdEl.textContent = roomId;
+  shareLink.value = location.href;
+
+  copyLink.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink.value);
+      connHint.textContent = "Link copied";
+      setTimeout(() => (connHint.textContent = ""), 1200);
+    } catch {
+      shareLink.select();
+      document.execCommand("copy");
+      connHint.textContent = "Link copied";
+      setTimeout(() => (connHint.textContent = ""), 1200);
+    }
   });
 
-  let bars = [];
+  let ws = null;
+  let myId = null;
+  let minPlayers = 3;
 
-  let running = false;
-  let finished = false;
-  let startAt = 0;
-  let lastT = now();
-
+  let roomPhase = "lobby";
   let trackLength = 1300;
-  let lanes = 6;
-  let boats = [];
-  let rng = mulberry32((Math.random() * 1e9) | 0);
-  let params = difficultyParams(2);
+  let players = []; // {id,name,dept}
+  let boats = []; // {id,name,dept,lane,x,speed,stamina,finishTimeMs}
+
+  let bars = [];
 
   function resizeCanvas() {
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -245,151 +213,155 @@ async function main() {
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
 
-  function resetRace() {
-    finished = false;
-    running = false;
-    startAt = 0;
-    lastT = now();
+  function updateButtons() {
+    const canStart = roomPhase !== "running" && players.length >= minPlayers;
+    btnStart.disabled = !canStart;
+    btnPaddle.disabled = roomPhase !== "running";
+  }
 
+  function applyRoomState(state) {
+    roomPhase = state.phase;
+    minPlayers = state.minPlayers || 3;
+    players = state.players || players;
+    playerCountEl.textContent = String(players.length);
+    bars = createBars(barsWrap, players);
+
+    if (roomPhase === "lobby") {
+      setStatus(statusDot, statusText, "warn", players.length >= minPlayers ? "Ready — press Start" : `Waiting… need ${minPlayers}+ players`);
+    } else if (roomPhase === "running") {
+      setStatus(statusDot, statusText, "good", "Race on! Space / Paddle");
+    } else {
+      setStatus(statusDot, statusText, "warn", "Finished — press Start to race again");
+    }
+
+    updateButtons();
+  }
+
+  function applyState(state) {
+    trackLength = state.trackLength || trackLength;
+    boats = (state.boats || []).slice().sort((a, b) => (a.lane ?? 0) - (b.lane ?? 0));
+
+    const me = boats.find((b) => b.id === myId);
+    if (roomPhase === "running" && me) {
+      if (me.stamina > 0.35) setStatus(statusDot, statusText, "good", "Race on! Space / Paddle");
+      else if (me.stamina > 0.18) setStatus(statusDot, statusText, "warn", "Careful — you’re tiring (pace it)");
+      else setStatus(statusDot, statusText, "bad", "Exhausted — slow down spamming");
+    }
+
+    // update bars meters
+    for (const item of bars) {
+      const boat = boats.find((bb) => bb.id === item.id);
+      if (!boat) continue;
+      const p = clamp((boat.x || 0) / trackLength, 0, 1);
+      item.meterI.style.width = `${p * 100}%`;
+      item.pctEl.textContent = formatPct(p);
+      item.nameEl.style.fontWeight = boat.id === myId ? "800" : "600";
+      item.nameEl.style.color = boat.id === myId ? "rgba(233,255,246,.98)" : "rgba(233,255,246,.90)";
+    }
+  }
+
+  function connect() {
+    connHint.textContent = "Connecting…";
+    const url = wsUrl();
+    ws = new WebSocket(url);
+
+    ws.addEventListener("open", () => {
+      connHint.textContent = "Connected";
+      ws.send(
+        JSON.stringify({
+          type: "join",
+          room: roomId,
+          name: nameInput.value || "Guest",
+          dept: deptSelect.value,
+        })
+      );
+    });
+
+    ws.addEventListener("message", (ev) => {
+      let msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+
+      if (msg.type === "joined") {
+        myId = msg.id;
+        minPlayers = msg.minPlayers || 3;
+        updateButtons();
+        return;
+      }
+
+      if (msg.type === "room_state") {
+        applyRoomState(msg);
+        return;
+      }
+
+      if (msg.type === "state") {
+        roomPhase = msg.phase || roomPhase;
+        applyState(msg);
+        updateButtons();
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      connHint.textContent = "Disconnected — refresh to reconnect";
+      btnStart.disabled = true;
+      btnPaddle.disabled = true;
+    });
+
+    ws.addEventListener("error", () => {
+      connHint.textContent = "Connection error";
+    });
+  }
+
+  function sendProfile() {
+    localStorage.setItem("lopotaBoatRace.name", nameInput.value);
     localStorage.setItem("lopotaBoatRace.dept", deptSelect.value);
-    localStorage.setItem("lopotaBoatRace.diff", difficultySelect.value);
-    localStorage.setItem("lopotaBoatRace.lanes", lanesSelect.value);
+    if (ws && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: "update_profile", name: nameInput.value || "Guest", dept: deptSelect.value }));
+    }
+  }
+
+  nameInput.addEventListener("change", sendProfile);
+  deptSelect.addEventListener("change", sendProfile);
+
+  btnStart.addEventListener("click", () => {
     localStorage.setItem("lopotaBoatRace.len", lengthInput.value);
-
-    trackLength = clamp(parseInt(lengthInput.value || "1300", 10) || 1300, 700, 2600);
-    lanes = clamp(parseInt(lanesSelect.value || "6", 10) || 6, 3, 10);
-    params = difficultyParams(parseInt(difficultySelect.value || "2", 10) || 2);
-
-    rng = mulberry32(((Math.random() * 1e9) | 0) ^ (trackLength << 1) ^ (lanes << 5));
-
-    const names = pickCompetitors(deptSelect.value, rng, lanes);
-    boats = names.map((name, i) =>
-      createBoat({
-        dept: getDept(name),
-        lane: i,
-        lanes,
-        isPlayer: i === 0,
-        rng,
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: "start",
+        trackLength: clamp(parseInt(lengthInput.value || "1300", 10) || 1300, 700, 2600),
       })
     );
+  });
 
-    for (const b of boats) {
-      b.speed = 120 + rng() * 25;
-      b.stamina = 1;
-      b.lastPaddleAt = 0;
-      b.finishTimeMs = null;
-      b.x = 0;
-    }
+  btnReset.addEventListener("click", () => {
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ type: "reset" }));
+  });
 
-    bars = createBars(barsWrap, names);
-    setStatus(statusDot, statusText, "warn", "Ready — press Start");
-    btnPaddle.disabled = true;
-    btnStart.disabled = false;
+  function paddle() {
+    if (!ws || ws.readyState !== ws.OPEN) return;
+    if (roomPhase !== "running") return;
+    ws.send(JSON.stringify({ type: "paddle" }));
   }
 
-  function startRace() {
-    running = true;
-    finished = false;
-    startAt = now();
-    for (const b of boats) b.finishTimeMs = null;
-    setStatus(statusDot, statusText, "good", "Race on! Space / Paddle");
-    btnPaddle.disabled = false;
-    btnStart.disabled = true;
-  }
-
-  function endRace() {
-    running = false;
-    finished = true;
-    btnPaddle.disabled = true;
-    btnStart.disabled = false;
-
-    const sorted = [...boats].sort((a, b) => (a.finishTimeMs ?? 1e18) - (b.finishTimeMs ?? 1e18));
-    const winner = sorted[0];
-    const isPlayerWinner = !!winner?.isPlayer;
-
-    setStatus(
-      statusDot,
-      statusText,
-      isPlayerWinner ? "good" : "warn",
-      isPlayerWinner ? "You win!" : `Winner: ${winner.dept.name}`
-    );
-  }
-
-  function paddle(playerOnly = true) {
-    if (!running) return;
-    const t = now();
-    for (const b of boats) {
-      if (playerOnly && !b.isPlayer) continue;
-      if (b.finishTimeMs != null) continue;
-      const since = b.lastPaddleAt ? t - b.lastPaddleAt : 999;
-      b.lastPaddleAt = t;
-      b.speed += paddleImpulse(b.stamina, since);
-      b.stamina = clamp(b.stamina - staminaDrain(since), 0, 1);
-    }
-  }
-
-  btnPaddle.addEventListener("click", () => paddle(true));
-  btnStart.addEventListener("click", () => (running ? resetRace() : startRace()));
+  btnPaddle.addEventListener("click", paddle);
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") {
       e.preventDefault();
-      if (!running && !finished) startRace();
-      else paddle(true);
+      if (roomPhase === "running") paddle();
+      else if (!btnStart.disabled) btnStart.click();
     }
     if (e.code === "KeyR") {
-      resetRace();
+      btnReset.click();
     }
   });
 
-  resetRace();
-
-  function update(dt) {
-    if (!running) return;
-    const t = now();
-    const elapsed = t - startAt;
-
-    for (const b of boats) {
-      if (b.isPlayer) continue;
-      if (b.finishTimeMs != null) continue;
-      const progress = b.x / trackLength;
-      const wants = params.aiAggro * (0.45 + 0.7 * (1 - progress));
-      const jitter = (rng() - 0.5) * 0.22;
-      const cadenceMs = lerp(420, 250, clamp(wants + jitter, 0, 1));
-      const since = b.lastPaddleAt ? t - b.lastPaddleAt : 999;
-      const will = since > cadenceMs && rng() < 0.9;
-      if (will) {
-        b.lastPaddleAt = t;
-        b.speed += paddleImpulse(b.stamina, since) * params.aiSkill;
-        b.stamina = clamp(
-          b.stamina - staminaDrain(since) * lerp(1.08, 0.92, params.aiSkill - 0.8),
-          0,
-          1
-        );
-      }
-    }
-
-    for (const b of boats) {
-      if (b.finishTimeMs != null) continue;
-
-      b.stamina = clamp(b.stamina + staminaRegen(dt), 0, 1);
-
-      const maxSpeed = computeBoatMaxSpeed(b.stamina);
-      b.speed *= Math.pow(0.985, dt * 60);
-      b.speed = Math.min(b.speed, maxSpeed);
-      b.speed = Math.max(b.speed, 80);
-
-      b.x += b.speed * dt * 0.72;
-      if (b.x >= trackLength) {
-        b.x = trackLength;
-        b.finishTimeMs = elapsed;
-      }
-    }
-
-    if (boats.every((b) => b.finishTimeMs != null)) {
-      endRace();
-    }
-  }
+  connect();
 
   function drawBackground(w, h) {
     const sky = ctx.createLinearGradient(0, 0, 0, h);
@@ -465,14 +437,17 @@ async function main() {
     ctx.closePath();
   }
 
-  function drawBoat({ b, w, h, waterY, margin, finishX }) {
-    const laneH = (h - waterY - margin * 1.2) / lanes;
-    const laneY = waterY + margin * 0.6 + laneH * (b.lane + 0.5);
-    const progress = b.x / trackLength;
+  function drawBoat({ boat, w, h, waterY, margin, finishX, lanes }) {
+    const laneH = (h - waterY - margin * 1.2) / Math.max(1, lanes);
+    const laneY = waterY + margin * 0.6 + laneH * ((boat.lane ?? 0) + 0.5);
+    const progress = (boat.x || 0) / trackLength;
     const x = lerp(margin + 80, finishX - 120, clamp(progress, 0, 1));
 
-    const wob = Math.sin((now() * 0.0022 + b.wobbleSeed * 9) * 2) * 2.6;
-    const pitch = Math.sin((now() * 0.0016 + b.wobbleSeed * 7) * 2) * 0.025;
+    const wobSeed = (boat.id || "").length * 0.1 + (boat.lane ?? 0) * 0.7;
+    const wob = Math.sin((now() * 0.0022 + wobSeed) * 2) * 2.6;
+    const pitch = Math.sin((now() * 0.0016 + wobSeed) * 2) * 0.025;
+
+    const dept = getDept(boat.dept);
 
     ctx.save();
     ctx.translate(x, laneY + wob);
@@ -485,18 +460,15 @@ async function main() {
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    const hullColor = b.dept.color;
     ctx.fillStyle = "rgba(0,0,0,.35)";
     roundRectPath(-54, -10, 120, 34, 16);
     ctx.fill();
-    ctx.fillStyle = hullColor;
+    ctx.fillStyle = dept.color;
     roundRectPath(-56, -14, 118, 34, 16);
     ctx.fill();
 
-    const decalW = 38;
-    const decalH = 16;
     ctx.globalAlpha = 0.92;
-    ctx.drawImage(logoImg, -20, -8, decalW, decalH);
+    ctx.drawImage(logoImg, -20, -8, 38, 16);
     ctx.globalAlpha = 1;
 
     ctx.strokeStyle = "rgba(233,255,246,.8)";
@@ -513,7 +485,7 @@ async function main() {
     ctx.drawImage(logoImg, 14, -58, 46, 20);
     ctx.globalAlpha = 1;
 
-    const shirtColor = "rgba(0,0,0,.22)";
+    const shirtColor = boat.id === myId ? "rgba(55,211,156,.22)" : "rgba(0,0,0,.22)";
     ctx.fillStyle = "rgba(233,255,246,.92)";
     ctx.beginPath();
     ctx.arc(-14, -22, 7.2, 0, Math.PI * 2);
@@ -531,32 +503,33 @@ async function main() {
     ctx.fillStyle = "rgba(233,255,246,.95)";
     ctx.shadowColor = "rgba(0,0,0,.35)";
     ctx.shadowBlur = 10;
-    ctx.fillText(b.dept.name, -56, -34);
+    ctx.fillText(`${boat.name} (${boat.dept})`, -56, -34);
     ctx.shadowBlur = 0;
 
+    const stamina = clamp(boat.stamina ?? 1, 0, 1);
     ctx.globalAlpha = 0.9;
     ctx.fillStyle = "rgba(0,0,0,.35)";
     ctx.fillRect(-56, -48, 70, 6);
-    ctx.fillStyle = b.stamina > 0.4 ? "rgba(55,211,156,.95)" : b.stamina > 0.2 ? "rgba(255,207,90,.95)" : "rgba(255,107,107,.95)";
-    ctx.fillRect(-56, -48, 70 * clamp(b.stamina, 0, 1), 6);
+    ctx.fillStyle = stamina > 0.4 ? "rgba(55,211,156,.95)" : stamina > 0.2 ? "rgba(255,207,90,.95)" : "rgba(255,107,107,.95)";
+    ctx.fillRect(-56, -48, 70 * stamina, 6);
     ctx.globalAlpha = 1;
 
     ctx.restore();
   }
 
-  function drawOverlay(w, h) {
+  function drawOverlay(w, h, lanes) {
     const pad = 14;
     ctx.save();
     ctx.globalAlpha = 0.65;
     ctx.fillStyle = "rgba(0,0,0,.26)";
-    ctx.fillRect(pad, pad, 320, 62);
+    ctx.fillRect(pad, pad, 360, 62);
     ctx.globalAlpha = 1;
     ctx.fillStyle = "rgba(233,255,246,.92)";
     ctx.font = "700 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial";
     ctx.fillText("Lopota Lake Boat Race", pad + 12, pad + 22);
     ctx.font = "600 12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial";
     ctx.fillStyle = "rgba(188,235,220,.92)";
-    const len = `${trackLength}m · ${lanes} depts · ${running ? "running" : finished ? "finished" : "ready"}`;
+    const len = `${trackLength}m · ${lanes} players · ${roomPhase}`;
     ctx.fillText(len, pad + 12, pad + 44);
     ctx.restore();
   }
@@ -573,6 +546,8 @@ async function main() {
     const margin = 18;
     const finishX = drawFinishLine(w, h, waterY, margin);
 
+    const lanes = Math.max(1, boats.length);
+
     ctx.globalAlpha = 0.22;
     ctx.strokeStyle = "rgba(233,255,246,.65)";
     for (let i = 0; i <= lanes; i++) {
@@ -585,51 +560,14 @@ async function main() {
     }
     ctx.globalAlpha = 1;
 
-    for (const b of boats) drawBoat({ b, w, h, waterY, margin, finishX });
-
-    for (const item of bars) {
-      const boat = boats.find((bb) => bb.dept.name === item.n);
-      if (!boat) continue;
-      const p = clamp(boat.x / trackLength, 0, 1);
-      item.meterI.style.width = `${p * 100}%`;
-      item.pctEl.textContent = formatPct(p);
-      item.nameEl.style.fontWeight = boat.isPlayer ? "800" : "600";
-      item.nameEl.style.color = boat.isPlayer ? "rgba(233,255,246,.98)" : "rgba(233,255,246,.90)";
+    for (const boat of boats) {
+      drawBoat({ boat, w, h, waterY, margin, finishX, lanes });
     }
 
-    const player = boats.find((b) => b.isPlayer);
-    if (player && running) {
-      if (player.stamina > 0.35) setStatus(statusDot, statusText, "good", "Race on! Space / Paddle");
-      else if (player.stamina > 0.18) setStatus(statusDot, statusText, "warn", "Careful — you’re tiring (pace it)");
-      else setStatus(statusDot, statusText, "bad", "Exhausted — slow down spamming");
-    }
-
-    if (running) {
-      const lead = [...boats].sort(byProgressDesc)[0];
-      if (lead) {
-        ctx.save();
-        ctx.globalAlpha = 0.82;
-        ctx.fillStyle = "rgba(0,0,0,.26)";
-        ctx.fillRect(w - 260, 14, 246, 62);
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = "rgba(233,255,246,.94)";
-        ctx.font = "800 13px ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial";
-        ctx.fillText("Leader", w - 248, 36);
-        ctx.font = "700 12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial";
-        ctx.fillStyle = "rgba(188,235,220,.92)";
-        ctx.fillText(lead.dept.name, w - 248, 56);
-        ctx.restore();
-      }
-    }
-
-    drawOverlay(w, h);
+    drawOverlay(w, h, lanes);
   }
 
   function loop() {
-    const t = now();
-    const dt = clamp((t - lastT) / 1000, 0, 0.05);
-    lastT = t;
-    update(dt);
     render();
     requestAnimationFrame(loop);
   }
