@@ -135,6 +135,7 @@ async function main() {
 
   const btnStart = document.querySelector("#start");
   const btnPaddle = document.querySelector("#paddle");
+  const btnBoost = document.querySelector("#boost");
   const btnReset = document.querySelector("#reset");
 
   const statusDot = document.querySelector("#statusDot");
@@ -217,6 +218,7 @@ async function main() {
     const canStart = roomPhase !== "running" && players.length >= minPlayers;
     btnStart.disabled = !canStart;
     btnPaddle.disabled = roomPhase !== "running";
+    if (btnBoost) btnBoost.disabled = roomPhase !== "running";
   }
 
   function applyRoomState(state) {
@@ -348,7 +350,37 @@ async function main() {
     ws.send(JSON.stringify({ type: "paddle" }));
   }
 
-  btnPaddle.addEventListener("click", paddle);
+  btnPaddle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    paddle();
+  });
+  btnPaddle.addEventListener("dblclick", (e) => e.preventDefault());
+
+  let boostTimer = null;
+  function startBoost() {
+    if (boostTimer) return;
+    paddle();
+    boostTimer = setInterval(paddle, 220);
+  }
+  function stopBoost() {
+    if (!boostTimer) return;
+    clearInterval(boostTimer);
+    boostTimer = null;
+  }
+
+  if (btnBoost) {
+    btnBoost.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      startBoost();
+    });
+    btnBoost.addEventListener("pointerup", stopBoost);
+    btnBoost.addEventListener("pointercancel", stopBoost);
+    btnBoost.addEventListener("pointerleave", stopBoost);
+    btnBoost.addEventListener("dblclick", (e) => e.preventDefault());
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopBoost();
+  });
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") {
@@ -579,3 +611,5 @@ main().catch((err) => {
   console.error(err);
   alert("Game failed to load. Check console for details.");
 });
+
+

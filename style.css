@@ -226,3 +226,11 @@ canvas{
   canvas{ height: 460px; }
   .bar{ grid-template-columns: 140px 1fr 44px; }
 }
+
+button{ touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+@media (max-width: 980px){ .btnrow button{ flex:1; } }
+
+
+.btnrow button{ padding: 14px 14px; min-height: 52px; font-size: 15px; }
+canvas{ touch-action: none; }
+
